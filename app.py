@@ -9,20 +9,19 @@ APHERESIS_SETTINGS = {
         'flow_range': (40, 70),
         'plasma_removal_range': (5, 25),
         'acd_ratio_range': (12, 16),
-        'hct_impact': 0.3,  # Hematocrit impact factor (lower for Optia)
-        'rbc_sensitivity': 0.4  # RBC contamination sensitivity
+        'hct_impact': 0.3,  # 30% hematocrit sensitivity
+        'rbc_base_contam': 2.0  # Base RBC contamination (×10⁹)
     },
     'Haemonetics': {
         'interface_range': (0.5, 2.0),
         'flow_range': (40, 65),
         'plasma_removal_range': (5, 20),
         'acd_ratio_range': (12, 15),
-        'hct_impact': 0.7,  # Higher hematocrit impact
-        'rbc_sensitivity': 0.8  # More sensitive to RBCs
+        'hct_impact': 0.7,  # 70% hematocrit sensitivity
+        'rbc_base_contam': 5.0  # Higher base contamination
     }
 }
 
-# UV-C bag parameters (254nm)
 BAG_TYPES = {
     'Spectra Optia (Polyethylene)': {'absorption': 0.9, 'scattering': 5.5, 'thickness': 0.20},
     'Haemonetics (PVC)': {'absorption': 1.3, 'scattering': 7.0, 'thickness': 0.25}
@@ -31,32 +30,34 @@ BAG_TYPES = {
 def calculate_ecp_uvc(tlc, lymph_percent, hct, system, lamp_power, target_dose, 
                      use_hood, bag_type, interface_pos, flow_rate, 
                      plasma_removal, acd_ratio):
-    """Enhanced ECP UV-C calculator with hematocrit-adjusted apheresis parameters"""
+    """Hematocrit-adjusted ECP calculator with system-specific efficiencies"""
     
     params = APHERESIS_SETTINGS[system]
     
-    # 1. Hematocrit-adjusted apheresis performance
-    hct_factor = 1 - (params['hct_impact'] * (hct - 40)/40  # Normalized to 40% Hct
-    interface_factor = (1 - (interface_pos - params['interface_range'][0]) / 
-                      (params['interface_range'][1] - params['interface_range'][0])) * hct_factor
+    # 1. Hematocrit efficiency correction (normalized to 40% Hct)
+    hct_efficiency = 1 - params['hct_impact'] * (hct - 40)/40
     
-    flow_factor = (flow_rate / params['flow_range'][1]) * hct_factor
-    purity_factor = 0.7 + (interface_pos * 0.15 * hct_factor)
+    # 2. Adjusted apheresis performance
+    interface_factor = (1 - abs(interface_pos - 1.25)/1.25) * hct_efficiency  # Optimal at 1.25
+    flow_factor = (flow_rate - params['flow_range'][0]) / (params['flow_range'][1] - params['flow_range'][0]) * hct_efficiency
+    purity_factor = 0.7 + (interface_pos * 0.15 * hct_efficiency)
     
-    # 2. Product composition with Hct-adjusted RBC contamination
-    mnc_conc = (tlc * (lymph_percent/100) * 1.2 * 4 * flow_factor * interface_factor)
-    rbc_contam = np.mean([2.0, 5.0]) * (1 - plasma_removal/20) * (hct/40) * params['rbc_sensitivity']
+    # 3. Product composition with Hct-adjusted RBC contamination
+    mnc_conc = (tlc * (lymph_percent/100) * 4 * flow_factor * interface_factor)
     
-    # 3. UV-C delivery (unchanged)
+    # RBC contamination increases with Hct and differs by system
+    rbc_contam = params['rbc_base_contam'] * (hct/40) * (1 - plasma_removal/25)
+    
+    # 4. UV-C delivery calculations
     transmission = np.exp(-np.sqrt(3 * BAG_TYPES[bag_type]['absorption'] * 
-                          (BAG_TYPES[bag_type]['absorption'] + BAG_TYPES[bag_type]['scattering'])) * 
+                                  (BAG_TYPES[bag_type]['absorption'] + BAG_TYPES[bag_type]['scattering'])) * 
                          BAG_TYPES[bag_type]['thickness'])
     distance = 20 if use_hood else 15
     effective_intensity = (lamp_power * 1000 * 0.85 * transmission) / (4 * np.pi * distance**2)
     
-    # 4. Dose adjustment with enhanced shielding calculation
-    shielding = (0.01 * mnc_conc) + (0.03 * rbc_contam * (hct/40))
-    effective_dose = target_dose * transmission * max(1 - shielding, 0.3)  # Minimum 30% dose
+    # 5. Dose adjustment with Hct-impacted shielding
+    shielding = (0.01 * mnc_conc) + (0.05 * rbc_contam * (hct/40))
+    effective_dose = target_dose * transmission * max(1 - shielding, 0.3)
     exp_time = (effective_dose / (effective_intensity / 1000)) / 60
     
     return {
@@ -66,122 +67,149 @@ def calculate_ecp_uvc(tlc, lymph_percent, hct, system, lamp_power, target_dose,
         'effective_dose': effective_dose,
         'exp_time': exp_time,
         'transmission': transmission,
-        'hct_factor': hct_factor,
-        'system_params': params
+        'hct_efficiency': hct_efficiency,
+        'system': system
     }
 
 def main():
-    st.set_page_config(page_title="Enhanced ECP Calculator", layout="wide")
-    st.title("Extracorporeal Photopheresis (ECP) Calculator with Hematocrit Adjustment")
+    st.set_page_config(page_title="Hematocrit-Aware ECP Calculator", layout="wide")
+    st.title("ECP Calculator with Hematocrit Adjustment")
     
     with st.sidebar:
-        st.header("Patient Parameters")
-        tlc = st.slider("TLC (×10³/µL)", 1.0, 50.0, 8.0, 0.5)
-        lymph_percent = st.slider("Lymphocyte %", 5, 90, 30)
-        hct = st.slider("Hematocrit (%)", 20.0, 60.0, 40.0, 0.1,
-                       help="Critical for apheresis efficiency calculation")
+        st.header("Patient Blood Parameters")
+        col1, col2 = st.columns(2)
+        with col1:
+            tlc = st.number_input("TLC (×10³/µL)", min_value=1.0, max_value=50.0, value=8.0, step=0.5)
+        with col2:
+            lymph_percent = st.number_input("Lymphocyte %", min_value=5, max_value=90, value=30)
         
-        st.header("System Configuration")
+        # HEMATOCRIT INPUT NOW PROMINENTLY DISPLAYED
+        hct = st.slider("Patient Hematocrit (%)", min_value=20.0, max_value=60.0, value=40.0, step=0.1,
+                       help="Critical for apheresis efficiency and RBC contamination")
+        
+        st.header("Treatment Setup")
         system = st.selectbox("Apheresis System", list(APHERESIS_SETTINGS.keys()))
         bag_type = st.selectbox("UV-C Bag Type", list(BAG_TYPES.keys()))
         
-        st.header("Treatment Parameters")
-        lamp_power = st.slider("UV-C Lamp Power (W)", 5, 50, 25)
-        target_dose = st.slider("Target Dose (J/cm²)", 0.0, 10.0, 2.5, 0.1)
+        st.header("UV-C Parameters")
+        lamp_power = st.slider("Lamp Power (W)", min_value=5, max_value=50, value=25)
+        target_dose = st.slider("Target Dose (J/cm²)", min_value=0.1, max_value=10.0, value=2.5, step=0.1)
         use_hood = st.checkbox("Use Laminar Hood", value=True)
-        
+    
+    # Apheresis Settings Section with HCT Warnings
+    with st.sidebar:
         st.header("Apheresis Settings")
+        
+        # Dynamic interface range suggestion based on Hct
+        interface_default = 1.0
+        if hct > 45:
+            interface_default = 0.8 if system == 'Haemonetics' else 1.0
+            st.warning(f"High Hct ({hct}%) - suggest lower interface for {system}")
+        
         interface_pos = st.slider("Interface Position", 
                                 APHERESIS_SETTINGS[system]['interface_range'][0], 
                                 APHERESIS_SETTINGS[system]['interface_range'][1], 
-                                1.0, 0.1)
+                                interface_default, 0.1)
+        
+        # Flow rate adjustment guidance
+        flow_default = 50
+        if hct > 45:
+            flow_default = 45 if system == 'Haemonetics' else 55
         flow_rate = st.slider("Flow Rate (mL/min)", 
                             APHERESIS_SETTINGS[system]['flow_range'][0], 
-                            APHERESIS_SETTINGS[system]['flow_range'][1], 50)
+                            APHERESIS_SETTINGS[system]['flow_range'][1], 
+                            flow_default)
+        
         plasma_removal = st.slider("Plasma Removal (%)", 
                                  APHERESIS_SETTINGS[system]['plasma_removal_range'][0], 
                                  APHERESIS_SETTINGS[system]['plasma_removal_range'][1], 15)
+        
+        # ACD ratio adjustment for high Hct
+        acd_default = 13
+        if hct > 45:
+            acd_default = 12 if system == 'Haemonetics' else 14
         acd_ratio = st.slider("ACD Ratio (1:X)", 
                             APHERESIS_SETTINGS[system]['acd_ratio_range'][0], 
-                            APHERESIS_SETTINGS[system]['acd_ratio_range'][1], 13)
+                            APHERESIS_SETTINGS[system]['acd_ratio_range'][1], 
+                            acd_default)
     
     # Calculate results
     results = calculate_ecp_uvc(tlc, lymph_percent, hct, system, lamp_power, target_dose,
                               use_hood, bag_type, interface_pos, flow_rate,
                               plasma_removal, acd_ratio)
     
-    # Display results
-    st.subheader("Procedure Parameters")
+    # Display Results
+    st.subheader(f"ECP Protocol for Hct {hct}% ({system})")
     
-    col1, col2 = st.columns(2)
+    # System Efficiency Panel
+    eff_color = "red" if results['hct_efficiency'] < 0.85 else "green"
+    st.markdown(f"""
+    <div style="background-color:#f0f2f6;padding:10px;border-radius:5px;margin-bottom:20px">
+        <h4 style="color:{eff_color}">System Efficiency: {results['hct_efficiency']:.2f} (1.0 = ideal at 40% Hct)</h4>
+        <p>Hematocrit impact: <b>{APHERESIS_SETTINGS[system]['hct_impact']*100:.0f}%</b> sensitivity | 
+        RBC contamination base: <b>{APHERESIS_SETTINGS[system]['rbc_base_contam']} ×10⁹</b></p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Results Columns
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
-        st.metric("System Efficiency Factor", f"{results['hct_factor']:.2f}",
-                help=f"Hematocrit-adjusted efficiency for {system}")
         st.metric("MNC Concentration", f"{results['mnc_conc']:.1f} ×10⁶/mL")
-        st.metric("RBC Contamination", f"{results['rbc_contam']:.1f} ×10⁹",
-                help=f"Higher in Haemonetics at Hct >40%: {APHERESIS_SETTINGS[system]['rbc_sensitivity']*100:.0f}% sensitivity")
+        st.metric("T-cell Purity", f"{results['purity_factor']:.2f}")
         
     with col2:
-        st.metric("Effective UV Dose", f"{results['effective_dose']:.2f} J/cm²")
-        st.metric("Treatment Time", f"{results['exp_time']:.1f} minutes")
-        st.metric("T-cell Purity", f"{results['purity_factor']:.2f}")
+        st.metric("RBC Contamination", f"{results['rbc_contam']:.1f} ×10⁹", 
+                delta=f"{(results['rbc_contam']-APHERESIS_SETTINGS[system]['rbc_base_contam']):.1f} vs baseline",
+                delta_color="inverse")
+        st.metric("UV Transmission", f"{results['transmission']*100:.1f}%")
+        
+    with col3:
+        st.metric("Effective Dose", f"{results['effective_dose']:.2f} J/cm²")
+        st.metric("Treatment Time", f"{results['exp_time']:.1f} min")
     
-    # System-specific guidance
-    st.subheader("System-Specific Optimization")
-    if system == 'Haemonetics':
-        st.warning("""
-        **For High Hematocrit (>45%):**
-        - Reduce flow rate by 10-20%
-        - Increase plasma removal by 5%
-        - Consider lower interface position (0.5-1.0)
-        """)
-    else:
-        st.info("""
-        **Spectra Optia Tips:**
-        - More tolerant of high Hct (up to 50%)
-        - Maintain flow rate 50-60mL/min for optimal yield
-        """)
+    # Visualization
+    st.subheader("Treatment Response")
+    fig, ax = plt.subplots(figsize=(10, 5))
     
-    # Create plots
-    st.subheader("Treatment Response Curves")
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-    
-    # Dose-response plot
     doses = np.linspace(0, 5, 100)
-    ax1.plot(doses, 100*np.exp(-1.0*doses*results['transmission']*results['purity_factor']), 'r-', label='T-cells')
-    ax1.plot(doses, 100*np.exp(-0.25*doses*results['transmission']), 'b-', label='Monocytes')
-    ax1.axvline(results['effective_dose'], color='k', linestyle='--', label='Selected Dose')
-    ax1.set_title(f'Dose-Response (Hct={hct}%)')
-    ax1.set_xlabel('UV-C Dose (J/cm²)')
-    ax1.set_ylabel('Viability (%)')
-    ax1.legend()
-    ax1.grid(alpha=0.3)
+    ax.plot(doses, 100*np.exp(-1.0*doses*results['transmission']*results['purity_factor']), 
+           'r-', label='T-cells')
+    ax.plot(doses, 100*np.exp(-0.25*doses*results['transmission']), 
+           'b-', label='Monocytes')
+    ax.axvline(results['effective_dose'], color='k', linestyle='--', label='Selected Dose')
     
-    # Time-response plot
-    times = np.linspace(0, max(results['exp_time']*2, 90), 100)
-    time_doses = (results['effective_intensity']/1000) * (times * 60)
-    ax2.plot(times, 100*np.exp(-1.0*time_doses*results['purity_factor']), 'r-', label='T-cells')
-    ax2.plot(times, 100*np.exp(-0.25*time_doses), 'b-', label='Monocytes')
-    ax2.axvline(results['exp_time'], color='k', linestyle='--')
-    ax2.set_title('Time-Response Curve')
-    ax2.set_xlabel('Time (minutes)')
-    ax2.legend()
-    ax2.grid(alpha=0.3)
+    ax.set_title(f'Dose-Response Curve (Hct {hct}%, {system})')
+    ax.set_xlabel('UV-C Dose (J/cm²)')
+    ax.set_ylabel('Viability (%)')
+    ax.legend()
+    ax.grid(alpha=0.3)
     
     st.pyplot(fig)
     
-    # Clinical protocol
-    st.subheader("Clinical Protocol Recommendations")
+    # Clinical Protocol
+    st.subheader("Optimized Clinical Protocol")
+    
+    if hct > 45:
+        st.warning("""
+        **High Hematocrit Protocol Adjustments:**
+        1. Reduce flow rate by 10-20% from standard
+        2. Increase plasma removal by 5-10%
+        3. Use lower interface position (0.8-1.0)
+        4. Consider higher ACD ratio (1:14-1:16)
+        """)
+    
     st.markdown(f"""
     **For Hct {hct}% with {system}:**
-    1. **Interface:** Maintain {interface_pos:.1f} ± 0.2
-    2. **Flow Rate:** {flow_rate} mL/min (adjust ±10% for Hct >45%)
-    3. **ACD Ratio:** 1:{acd_ratio} (increase to 1:{min(16, acd_ratio+1)} if RBC >5×10⁹)
-    4. **UV Dose:** Target {results['effective_dose']:.2f} J/cm² ± 15%
+    - **Flow Rate:** {flow_rate} mL/min ({'reduce' if hct > 45 else 'maintain'} for current Hct)
+    - **Interface Position:** {interface_pos:.1f} ({'lower' if hct > 45 else 'standard'} recommended)
+    - **ACD Ratio:** 1:{acd_ratio} ({'increase' if hct > 45 else 'standard'} anticoagulation)
+    - **Expected RBC Contamination:** {results['rbc_contam']:.1f} ×10⁹ 
+      ({(results['rbc_contam']/APHERESIS_SETTINGS[system]['rbc_base_contam']-1)*100:.0f}% {'increase' if hct > 40 else 'decrease'} from 40% Hct baseline)
     
-    **Hematocrit-Specific Notes:**
-    - Current efficiency factor: {results['hct_factor']:.2f} (1.0 = ideal at 40% Hct)
-    - RBC contamination increased by {(hct/40-1)*100:.0f}% vs normal Hct
+    **UV-C Parameters:**
+    - Maintain dose at {results['effective_dose']:.2f} ± 0.5 J/cm²
+    - Treatment time: {results['exp_time']:.1f} minutes
     """)
 
 if __name__ == "__main__":
