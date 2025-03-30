@@ -67,6 +67,7 @@ def calculate_ecp_uvc(tlc, lymph_percent, hct, system, lamp_power, target_dose,
         'effective_dose': effective_dose,
         'exp_time': exp_time,
         'transmission': transmission,
+        'effective_intensity': effective_intensity,
         'hct_efficiency': hct_efficiency,
         'system': system
     }
@@ -168,24 +169,44 @@ def main():
         st.metric("Effective Dose", f"{results['effective_dose']:.2f} J/cm²")
         st.metric("Treatment Time", f"{results['exp_time']:.1f} min")
     
-    # Visualization
-    st.subheader("Treatment Response")
-    fig, ax = plt.subplots(figsize=(10, 5))
+    # Visualization - Now with both curves
+    st.subheader("Treatment Response Analysis")
     
-    doses = np.linspace(0, 5, 100)
-    ax.plot(doses, 100*np.exp(-1.0*doses*results['transmission']*results['purity_factor']), 
-           'r-', label='T-cells')
-    ax.plot(doses, 100*np.exp(-0.25*doses*results['transmission']), 
-           'b-', label='Monocytes')
-    ax.axvline(results['effective_dose'], color='k', linestyle='--', label='Selected Dose')
+    # Create two columns for the plots
+    col1, col2 = st.columns(2)
     
-    ax.set_title(f'Dose-Response Curve (Hct {hct}%, {system})')
-    ax.set_xlabel('UV-C Dose (J/cm²)')
-    ax.set_ylabel('Viability (%)')
-    ax.legend()
-    ax.grid(alpha=0.3)
+    with col1:
+        # Dose-response plot
+        fig1, ax1 = plt.subplots(figsize=(8, 5))
+        doses = np.linspace(0, 5, 100)
+        ax1.plot(doses, 100*np.exp(-1.0*doses*results['transmission']*results['purity_factor']), 
+               'r-', label='T-cells')
+        ax1.plot(doses, 100*np.exp(-0.25*doses*results['transmission']), 
+               'b-', label='Monocytes')
+        ax1.axvline(results['effective_dose'], color='k', linestyle='--', label='Selected Dose')
+        ax1.set_title('Dose-Response Curve')
+        ax1.set_xlabel('UV-C Dose (J/cm²)')
+        ax1.set_ylabel('Viability (%)')
+        ax1.legend()
+        ax1.grid(alpha=0.3)
+        st.pyplot(fig1)
     
-    st.pyplot(fig)
+    with col2:
+        # Time-response plot
+        fig2, ax2 = plt.subplots(figsize=(8, 5))
+        times = np.linspace(0, max(results['exp_time']*2, 90), 100)
+        time_doses = (results['effective_intensity']/1000) * (times * 60)
+        ax2.plot(times, 100*np.exp(-1.0*time_doses*results['purity_factor']), 
+               'r-', label='T-cells')
+        ax2.plot(times, 100*np.exp(-0.25*time_doses), 
+               'b-', label='Monocytes')
+        ax2.axvline(results['exp_time'], color='k', linestyle='--', label='Estimated Time')
+        ax2.set_title('Time-Response Curve')
+        ax2.set_xlabel('Time (minutes)')
+        ax2.set_ylabel('Viability (%)')
+        ax2.legend()
+        ax2.grid(alpha=0.3)
+        st.pyplot(fig2)
     
     # Clinical Protocol
     st.subheader("Optimized Clinical Protocol")
