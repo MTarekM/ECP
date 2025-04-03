@@ -26,7 +26,7 @@ BAG_TYPES = {
 }
 
 def calculate_ecp_uv(tlc, lymph_percent, hct, system, lamp_power, target_dose, 
-                     use_hood, bag_type, flow_rate, plasma_removal, acd_ratio):
+                     use_hood, custom_distance, bag_type, flow_rate, plasma_removal, acd_ratio):
     """Hematocrit-adjusted ECP calculator with system-specific efficiencies"""
     
     params = APHERESIS_SETTINGS[system]
@@ -47,9 +47,9 @@ def calculate_ecp_uv(tlc, lymph_percent, hct, system, lamp_power, target_dose,
     
     # 4. UV delivery calculations
     transmission = np.exp(-np.sqrt(3 * BAG_TYPES[bag_type]['absorption'] * 
-                                  (BAG_TYPES[bag_type]['absorption'] + BAG_TYPES[bag_type]['scattering'])) * 
+                          (BAG_TYPES[bag_type]['absorption'] + BAG_TYPES[bag_type]['scattering'])) * 
                          BAG_TYPES[bag_type]['thickness'])
-    distance = 20 if use_hood else 15
+    distance = custom_distance if not use_hood else 20  # Hood always uses 20cm distance
     effective_intensity = (lamp_power * 1000 * 0.85 * transmission) / (4 * np.pi * distance**2)
     
     # 5. Dose adjustment with Hct-impacted shielding
@@ -66,7 +66,8 @@ def calculate_ecp_uv(tlc, lymph_percent, hct, system, lamp_power, target_dose,
         'transmission': transmission,
         'effective_intensity': effective_intensity,
         'hct_efficiency': hct_efficiency,
-        'system': system
+        'system': system,
+        'distance': distance
     }
 
 def main():
@@ -99,8 +100,14 @@ def main():
             target_dose = st.slider("Target Dose (J/cm²)", 2.0, 6.0, 2.5, 0.1)
         
         lamp_power = st.slider("Lamp Power (W)", 5, 50, 25)
-        use_hood = st.checkbox("Use Laminar Hood", value=True)
-    
+        use_hood = st.checkbox("Use Laminar Hood (fixed 20cm distance)", value=True)
+        
+        if not use_hood:
+            custom_distance = st.slider("Custom Distance (cm)", 10, 50, 15, 1,
+                                       help="Distance between UV source and treatment bag")
+        else:
+            custom_distance = 20  # Default when hood is used
+
     # Apheresis Settings Section with HCT Warnings
     with st.sidebar:
         st.header("Apheresis Settings")
@@ -129,7 +136,7 @@ def main():
     
     # Calculate results
     results = calculate_ecp_uv(tlc, lymph_percent, hct, system, lamp_power, target_dose,
-                              use_hood, bag_type, flow_rate, plasma_removal, acd_ratio)
+                              use_hood, custom_distance, bag_type, flow_rate, plasma_removal, acd_ratio)
     
     # Display Results
     st.subheader(f"ECP Protocol for Hct {hct}% ({system})")
@@ -160,6 +167,7 @@ def main():
     with col3:
         st.metric("Effective Dose", f"{results['effective_dose']:.2f} J/cm²")
         st.metric("Treatment Time", f"{results['exp_time']:.1f} min")
+        st.metric("Distance", f"{results['distance']} cm")
     
     # Visualization
     st.subheader("Treatment Response Analysis")
@@ -217,6 +225,7 @@ def main():
     **UV Parameters:**
     - Maintain dose at {results['effective_dose']:.2f} ± 0.5 J/cm²
     - Treatment time: {results['exp_time']:.1f} minutes
+    - Source distance: {results['distance']} cm
     """)
 
 if __name__ == "__main__":
