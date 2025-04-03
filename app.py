@@ -71,7 +71,7 @@ def calculate_ecp_uv(tlc, lymph_percent, hct, system, lamp_power, target_dose,
 
 def main():
     st.set_page_config(page_title="UV-based Sensitizer-free ECP Calculator", layout="wide")
-    st.title(""UV-based Sensitizer-free ECP Calculator")
+    st.title("UV-based Sensitizer-free ECP Calculator")
     
     with st.sidebar:
         st.header("Patient Blood Parameters")
