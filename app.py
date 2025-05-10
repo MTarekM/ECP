@@ -8,17 +8,35 @@ APHERESIS_SETTINGS = {
         'flow_range': (40, 70),
         'plasma_removal_range': (5, 25),
         'acd_ratio_range': (12, 16),
-        'hct_impact': 0.3,  # 30% hematocrit sensitivity
-        'rbc_base_contam': 2.0  # Base RBC contamination (×10⁹)
+        'hct_impact': 0.3,
+        'rbc_base_contam': 2.0,
+        'purity_base': 0.7,
+        'purity_multiplier': 0.15,
+        'interface_position': 1.25
     },
     'Haemonetics': {
         'flow_range': (40, 65),
         'plasma_removal_range': (5, 20),
         'acd_ratio_range': (12, 15),
-        'hct_impact': 0.7,  # 70% hematocrit sensitivity
-        'rbc_base_contam': 5.0  # Higher base contamination
+        'hct_impact': 0.7,
+        'rbc_base_contam': 5.0,
+        'purity_base': 0.7,
+        'purity_multiplier': 0.15,
+        'interface_position': 1.25
+    },
+    # New Whole Blood Apheresis parameters
+    'Whole Blood': {
+        'flow_range': (30, 50),
+        'plasma_removal_range': (5, 15),
+        'acd_ratio_range': (10, 14),
+        'hct_impact': 0.5,
+        'rbc_base_contam': 10.0,
+        'purity_base': 0.5,
+        'purity_multiplier': 0.1,
+        'interface_position': 0.8
     }
 }
+
 
 BAG_TYPES = {
     'Spectra Optia (Polyethylene)': {'absorption': 0.9, 'scattering': 5.5, 'thickness': 0.20},
@@ -34,10 +52,12 @@ def calculate_ecp_uv(tlc, lymph_percent, hct, system, lamp_power, target_dose,
     # 1. Hematocrit efficiency correction (normalized to 40% Hct)
     hct_efficiency = 1 - params['hct_impact'] * (hct - 40)/40
     
-    # 2. Adjusted apheresis performance with optimal interface position (1.25)
-    interface_factor = hct_efficiency  # Optimal at fixed 1.25 position
+    # 2. Adjusted apheresis performance with system-specific interface position
+    interface_factor = hct_efficiency * params['interface_position']
     flow_factor = (flow_rate - params['flow_range'][0]) / (params['flow_range'][1] - params['flow_range'][0]) * hct_efficiency
-    purity_factor = 0.7 + (1.25 * 0.15 * hct_efficiency)  # Interface position fixed at 1.25
+    
+    # System-specific purity calculation
+    purity_factor = params['purity_base'] + (params['purity_multiplier'] * hct_efficiency)
     
     # 3. Product composition with Hct-adjusted RBC contamination
     mnc_conc = (tlc * (lymph_percent/100) * 4 * flow_factor * interface_factor)
